@@ -6,8 +6,11 @@ import com.github.mongobee.changeset.ChangeSet;
 import org.reflections.Reflections;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.env.Environment;
+import org.springframework.core.type.AnnotatedTypeMetadata;
+import org.springframework.core.type.StandardAnnotationMetadata;
+import org.springframework.core.type.StandardMethodMetadata;
+import org.springframework.util.MultiValueMap;
 
-import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Method;
 import java.util.*;
 
@@ -20,10 +23,9 @@ import static java.util.Arrays.asList;
  * @since 27/07/2014
  */
 public class ChangeService {
-  private static final String DEFAULT_PROFILE = "default";
 
   private final String changeLogsBasePackage;
-  private final List<String> activeProfiles;
+  private final Environment environment;
 
   public ChangeService(String changeLogsBasePackage) {
     this(changeLogsBasePackage, null);
@@ -31,18 +33,13 @@ public class ChangeService {
 
   public ChangeService(String changeLogsBasePackage, Environment environment) {
     this.changeLogsBasePackage = changeLogsBasePackage;
-
-    if (environment != null && environment.getActiveProfiles() != null && environment.getActiveProfiles().length> 0) {
-      this.activeProfiles = asList(environment.getActiveProfiles());
-    } else {
-      this.activeProfiles = asList(DEFAULT_PROFILE);
-    }
+    this.environment = environment;
   }
 
   public List<Class<?>> fetchChangeLogs(){
     Reflections reflections = new Reflections(changeLogsBasePackage);
     Set<Class<?>> changeLogs = reflections.getTypesAnnotatedWith(ChangeLog.class); // TODO remove dependency, do own method
-    List<Class<?>> filteredChangeLogs = (List<Class<?>>) filterByActiveProfiles(changeLogs);
+    List<Class<?>> filteredChangeLogs = filterClassesByActiveProfiles(changeLogs);
 
     Collections.sort(filteredChangeLogs, new ChangeLogComparator());
 
@@ -51,7 +48,7 @@ public class ChangeService {
 
   public List<Method> fetchChangeSets(final Class<?> type) {
     final List<Method> changeSets = filterChangeSetAnnotation(asList(type.getDeclaredMethods()));
-    final List<Method> filteredChangeSets = (List<Method>) filterByActiveProfiles(changeSets);
+    final List<Method> filteredChangeSets = filterMethodsByActiveProfiles(changeSets);
 
     Collections.sort(filteredChangeSets, new ChangeSetComparator());
 
@@ -81,23 +78,38 @@ public class ChangeService {
       return null;
     }
   }
-
-  private boolean matchesActiveSpringProfile(AnnotatedElement element) {
-    if (element.isAnnotationPresent(Profile.class)) {
-      Profile profiles = element.getAnnotation(Profile.class);
-      List<String> values = asList(profiles.value());
-      return ListUtils.intersection(activeProfiles, values).size() > 0 ? true : false;
-
-    } else {
-      return true; // no-profiled changeset always matches
+  private boolean matchesActiveSpringProfile(Environment environment, AnnotatedTypeMetadata metadata) {
+    if (environment != null) {
+      MultiValueMap<String, Object> attrs = metadata.getAllAnnotationAttributes(Profile.class.getName());
+      if (attrs != null) {
+        for (Object value : attrs.get("value")) {
+          if (environment.acceptsProfiles(((String[]) value))) {
+            return true;
+          }
+        }
+        return false;
+      }
     }
+    return true;
   }
 
-  private List<?> filterByActiveProfiles(Collection<? extends AnnotatedElement> annotated) {
-    List<AnnotatedElement> filtered = new ArrayList<>();
-    for (AnnotatedElement element : annotated) {
-      if (matchesActiveSpringProfile(element)){
+  private List<Method> filterMethodsByActiveProfiles(Collection<? extends Method> annotated) {
+    List<Method> filtered = new ArrayList<>();
+    for (Method element : annotated) {
+      AnnotatedTypeMetadata metadata = new StandardMethodMetadata(element, true);
+      if (matchesActiveSpringProfile(environment, metadata)){
         filtered.add( element);
+      }
+    }
+    return filtered;
+  }
+
+  private List<Class<?>> filterClassesByActiveProfiles(Collection<? extends Class> annotated) {
+    List<Class<?>> filtered = new ArrayList<>();
+    for (Class<?> element : annotated) {
+      AnnotatedTypeMetadata metadata = new StandardAnnotationMetadata(element, true);
+      if (matchesActiveSpringProfile(environment, metadata)){
+        filtered.add(element);
       }
     }
     return filtered;
